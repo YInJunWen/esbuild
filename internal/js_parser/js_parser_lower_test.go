@@ -3,6 +3,8 @@ package js_parser
 import (
 	"fmt"
 	"testing"
+
+	"github.com/evanw/esbuild/internal/compat"
 )
 
 func TestLowerFunctionArgumentScope(t *testing.T) {
@@ -33,15 +35,31 @@ func TestLowerFunctionArgumentScope(t *testing.T) {
 	}
 }
 
+func TestLowerArrowFunction(t *testing.T) {
+	expectPrintedTarget(t, 5, "function foo(a) { arr.forEach(e => this.foo(e)) }",
+		"function foo(a) {\n  var _this = this;\n  arr.forEach(function(e) {\n    return _this.foo(e);\n  });\n}\n")
+	expectPrintedTarget(t, 5, "function foo(a) { return () => arguments[0] }",
+		"function foo(a) {\n  var _arguments = arguments;\n  return function() {\n    return _arguments[0];\n  };\n}\n")
+
+	expectPrintedTarget(t, 5, "function foo(a) { arr.forEach(function(e) { return this.foo(e) }) }",
+		"function foo(a) {\n  arr.forEach(function(e) {\n    return this.foo(e);\n  });\n}\n")
+	expectPrintedTarget(t, 5, "function foo(a) { return function() { return arguments[0] } }",
+		"function foo(a) {\n  return function() {\n    return arguments[0];\n  };\n}\n")
+
+	// Handling this case isn't implemented yet
+	expectPrintedTarget(t, 5, "var foo = () => this",
+		"var foo = function() {\n  return this;\n};\n")
+}
+
 func TestLowerNullishCoalescing(t *testing.T) {
-	expectParseError(t, "a ?? b && c", "<stdin>: error: Unexpected \"&&\"\n")
-	expectParseError(t, "a ?? b || c", "<stdin>: error: Unexpected \"||\"\n")
-	expectParseError(t, "a ?? b && c || d", "<stdin>: error: Unexpected \"&&\"\n")
-	expectParseError(t, "a ?? b || c && d", "<stdin>: error: Unexpected \"||\"\n")
-	expectParseError(t, "a && b ?? c", "<stdin>: error: Unexpected \"??\"\n")
-	expectParseError(t, "a || b ?? c", "<stdin>: error: Unexpected \"??\"\n")
-	expectParseError(t, "a && b || c ?? c", "<stdin>: error: Unexpected \"??\"\n")
-	expectParseError(t, "a || b && c ?? d", "<stdin>: error: Unexpected \"??\"\n")
+	expectParseError(t, "a ?? b && c", "<stdin>: ERROR: Unexpected \"&&\"\n")
+	expectParseError(t, "a ?? b || c", "<stdin>: ERROR: Unexpected \"||\"\n")
+	expectParseError(t, "a ?? b && c || d", "<stdin>: ERROR: Unexpected \"&&\"\n")
+	expectParseError(t, "a ?? b || c && d", "<stdin>: ERROR: Unexpected \"||\"\n")
+	expectParseError(t, "a && b ?? c", "<stdin>: ERROR: Unexpected \"??\"\n")
+	expectParseError(t, "a || b ?? c", "<stdin>: ERROR: Unexpected \"??\"\n")
+	expectParseError(t, "a && b || c ?? c", "<stdin>: ERROR: Unexpected \"??\"\n")
+	expectParseError(t, "a || b && c ?? d", "<stdin>: ERROR: Unexpected \"??\"\n")
 	expectPrinted(t, "a ?? b, b && c", "a ?? b, b && c;\n")
 	expectPrinted(t, "a ?? b, b || c", "a ?? b, b || c;\n")
 	expectPrinted(t, "a && b, b ?? c", "a && b, b ?? c;\n")
@@ -502,21 +520,21 @@ func TestLowerOptionalChain(t *testing.T) {
 	expectPrintedTarget(t, 2019, "(delete a?.[b])[c]", "(a == null ? true : delete a[b])[c];\n")
 	expectPrintedTarget(t, 2019, "(delete a?.(b))(c)", "(a == null ? true : delete a(b))(c);\n")
 
-	expectPrintedTarget(t, 2019, "null?.x", "void 0;\n")
-	expectPrintedTarget(t, 2019, "null?.[x]", "void 0;\n")
-	expectPrintedTarget(t, 2019, "null?.(x)", "void 0;\n")
+	expectPrintedTarget(t, 2019, "null?.x", "")
+	expectPrintedTarget(t, 2019, "null?.[x]", "")
+	expectPrintedTarget(t, 2019, "null?.(x)", "")
 
-	expectPrintedTarget(t, 2019, "delete null?.x", "true;\n")
-	expectPrintedTarget(t, 2019, "delete null?.[x]", "true;\n")
-	expectPrintedTarget(t, 2019, "delete null?.(x)", "true;\n")
+	expectPrintedTarget(t, 2019, "delete null?.x", "")
+	expectPrintedTarget(t, 2019, "delete null?.[x]", "")
+	expectPrintedTarget(t, 2019, "delete null?.(x)", "")
 
-	expectPrintedTarget(t, 2019, "undefined?.x", "void 0;\n")
-	expectPrintedTarget(t, 2019, "undefined?.[x]", "void 0;\n")
-	expectPrintedTarget(t, 2019, "undefined?.(x)", "void 0;\n")
+	expectPrintedTarget(t, 2019, "undefined?.x", "")
+	expectPrintedTarget(t, 2019, "undefined?.[x]", "")
+	expectPrintedTarget(t, 2019, "undefined?.(x)", "")
 
-	expectPrintedTarget(t, 2019, "delete undefined?.x", "true;\n")
-	expectPrintedTarget(t, 2019, "delete undefined?.[x]", "true;\n")
-	expectPrintedTarget(t, 2019, "delete undefined?.(x)", "true;\n")
+	expectPrintedTarget(t, 2019, "delete undefined?.x", "")
+	expectPrintedTarget(t, 2019, "delete undefined?.[x]", "")
+	expectPrintedTarget(t, 2019, "delete undefined?.(x)", "")
 
 	expectPrintedMangleTarget(t, 2019, "(foo(), null)?.x; y = (bar(), null)?.x", "foo(), y = (bar(), void 0);\n")
 	expectPrintedMangleTarget(t, 2019, "(foo(), null)?.[x]; y = (bar(), null)?.[x]", "foo(), y = (bar(), void 0);\n")
@@ -530,13 +548,13 @@ func TestLowerOptionalChain(t *testing.T) {
 	expectPrintedTarget(t, 2020, "x?.[y]", "x?.[y];\n")
 	expectPrintedTarget(t, 2020, "x?.(y)", "x?.(y);\n")
 
-	expectPrintedTarget(t, 2020, "null?.x", "void 0;\n")
-	expectPrintedTarget(t, 2020, "null?.[x]", "void 0;\n")
-	expectPrintedTarget(t, 2020, "null?.(x)", "void 0;\n")
+	expectPrintedTarget(t, 2020, "null?.x", "")
+	expectPrintedTarget(t, 2020, "null?.[x]", "")
+	expectPrintedTarget(t, 2020, "null?.(x)", "")
 
-	expectPrintedTarget(t, 2020, "undefined?.x", "void 0;\n")
-	expectPrintedTarget(t, 2020, "undefined?.[x]", "void 0;\n")
-	expectPrintedTarget(t, 2020, "undefined?.(x)", "void 0;\n")
+	expectPrintedTarget(t, 2020, "undefined?.x", "")
+	expectPrintedTarget(t, 2020, "undefined?.[x]", "")
+	expectPrintedTarget(t, 2020, "undefined?.(x)", "")
 
 	expectPrintedTarget(t, 2020, "(foo(), null)?.x", "(foo(), null)?.x;\n")
 	expectPrintedTarget(t, 2020, "(foo(), null)?.[x]", "(foo(), null)?.[x];\n")
@@ -643,4 +661,48 @@ func TestLowerOptionalCatchBinding(t *testing.T) {
 func TestLowerExportStarAs(t *testing.T) {
 	expectPrintedTarget(t, 2020, "export * as ns from 'path'", "export * as ns from \"path\";\n")
 	expectPrintedTarget(t, 2019, "export * as ns from 'path'", "import * as ns from \"path\";\nexport { ns };\n")
+}
+
+func TestAsyncGeneratorFns(t *testing.T) {
+	err := ""
+	expectParseErrorWithUnsupportedFeatures(t, compat.AsyncAwait, "async function gen() {}", err)
+	expectParseErrorWithUnsupportedFeatures(t, compat.AsyncAwait, "(async function () {});", err)
+	expectParseErrorWithUnsupportedFeatures(t, compat.AsyncAwait, "({ async foo() {} });", err)
+
+	err = "<stdin>: ERROR: Transforming generator functions to the configured target environment is not supported yet\n"
+	expectParseErrorWithUnsupportedFeatures(t, compat.Generator, "function* gen() {}", err)
+	expectParseErrorWithUnsupportedFeatures(t, compat.Generator, "(function* () {});", err)
+	expectParseErrorWithUnsupportedFeatures(t, compat.Generator, "({ *foo() {} });", err)
+
+	err = "<stdin>: ERROR: Transforming async functions to the configured target environment is not supported yet\n"
+	expectParseErrorWithUnsupportedFeatures(t, compat.AsyncAwait|compat.Generator, "async function gen() {}", err)
+	expectParseErrorWithUnsupportedFeatures(t, compat.AsyncAwait|compat.Generator, "(async function () {});", err)
+	expectParseErrorWithUnsupportedFeatures(t, compat.AsyncAwait|compat.Generator, "({ async foo() {} });", err)
+
+	err = "<stdin>: ERROR: Transforming async generator functions to the configured target environment is not supported yet\n"
+	expectParseErrorWithUnsupportedFeatures(t, compat.AsyncGenerator, "async function* gen() {}", err)
+	expectParseErrorWithUnsupportedFeatures(t, compat.AsyncGenerator, "(async function* () {});", err)
+	expectParseErrorWithUnsupportedFeatures(t, compat.AsyncGenerator, "({ async *foo() {} });", err)
+}
+
+func TestForAwait(t *testing.T) {
+	err := ""
+	expectParseErrorWithUnsupportedFeatures(t, compat.AsyncAwait, "async function gen() { for await (x of y) ; }", err)
+	expectParseErrorWithUnsupportedFeatures(t, compat.Generator, "async function gen() { for await (x of y) ; }", err)
+
+	// This is ok because for-await can be lowered to await
+	expectParseErrorWithUnsupportedFeatures(t, compat.ForAwait|compat.Generator, "async function gen() { for await (x of y) ; }", err)
+
+	// This is ok because for-await can be lowered to yield
+	expectParseErrorWithUnsupportedFeatures(t, compat.ForAwait|compat.AsyncAwait, "async function gen() { for await (x of y) ; }", err)
+
+	// This is not ok because for-await can't be lowered
+	err =
+		"<stdin>: ERROR: Transforming async functions to the configured target environment is not supported yet\n" +
+			"<stdin>: ERROR: Transforming for-await loops to the configured target environment is not supported yet\n"
+	expectParseErrorWithUnsupportedFeatures(t, compat.ForAwait|compat.AsyncAwait|compat.Generator, "async function gen() { for await (x of y) ; }", err)
+
+	// Can't use for-await at the top-level without top-level await
+	err = "<stdin>: ERROR: Top-level await is not available in the configured target environment\n"
+	expectParseErrorWithUnsupportedFeatures(t, compat.TopLevelAwait, "for await (x of y) ;", err)
 }

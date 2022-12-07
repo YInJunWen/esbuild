@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -17,82 +18,209 @@ import (
 
 func newBuildOptions() api.BuildOptions {
 	return api.BuildOptions{
-		Loader: make(map[string]api.Loader),
-		Define: make(map[string]string),
-		Banner: make(map[string]string),
-		Footer: make(map[string]string),
+		Banner:      make(map[string]string),
+		Define:      make(map[string]string),
+		Footer:      make(map[string]string),
+		Loader:      make(map[string]api.Loader),
+		LogOverride: make(map[string]api.LogLevel),
+		Supported:   make(map[string]bool),
 	}
 }
 
 func newTransformOptions() api.TransformOptions {
 	return api.TransformOptions{
-		Define: make(map[string]string),
+		Define:      make(map[string]string),
+		LogOverride: make(map[string]api.LogLevel),
+		Supported:   make(map[string]bool),
 	}
 }
 
 type parseOptionsKind uint8
 
 const (
+	// This means we're parsing it for our own internal use
 	kindInternal parseOptionsKind = iota
+
+	// This means the result is returned through a public API
 	kindExternal
 )
+
+type parseOptionsExtras struct {
+	metafile    *string
+	mangleCache *string
+}
+
+func isBoolFlag(arg string, flag string) bool {
+	if strings.HasPrefix(arg, flag) {
+		remainder := arg[len(flag):]
+		return len(remainder) == 0 || remainder[0] == '='
+	}
+	return false
+}
+
+func parseBoolFlag(arg string, defaultValue bool) (bool, *cli_helpers.ErrorWithNote) {
+	equals := strings.IndexByte(arg, '=')
+	if equals == -1 {
+		return defaultValue, nil
+	}
+	value := arg[equals+1:]
+	switch value {
+	case "false":
+		return false, nil
+	case "true":
+		return true, nil
+	}
+	return false, cli_helpers.MakeErrorWithNote(
+		fmt.Sprintf("Invalid value %q in %q", value, arg),
+		"Valid values are \"true\" or \"false\".",
+	)
+}
 
 func parseOptionsImpl(
 	osArgs []string,
 	buildOpts *api.BuildOptions,
 	transformOpts *api.TransformOptions,
 	kind parseOptionsKind,
-) (err error, metafile *string) {
+) (extras parseOptionsExtras, err *cli_helpers.ErrorWithNote) {
 	hasBareSourceMapFlag := false
 
 	// Parse the arguments now that we know what we're parsing
 	for _, arg := range osArgs {
 		switch {
-		case arg == "--bundle" && buildOpts != nil:
-			buildOpts.Bundle = true
-
-		case arg == "--preserve-symlinks" && buildOpts != nil:
-			buildOpts.PreserveSymlinks = true
-
-		case arg == "--splitting" && buildOpts != nil:
-			buildOpts.Splitting = true
-
-		case arg == "--allow-overwrite" && buildOpts != nil:
-			buildOpts.AllowOverwrite = true
-
-		case arg == "--watch" && buildOpts != nil:
-			buildOpts.Watch = &api.WatchMode{}
-
-		case arg == "--minify":
-			if buildOpts != nil {
-				buildOpts.MinifySyntax = true
-				buildOpts.MinifyWhitespace = true
-				buildOpts.MinifyIdentifiers = true
+		case isBoolFlag(arg, "--bundle") && buildOpts != nil:
+			if value, err := parseBoolFlag(arg, true); err != nil {
+				return parseOptionsExtras{}, err
 			} else {
-				transformOpts.MinifySyntax = true
-				transformOpts.MinifyWhitespace = true
-				transformOpts.MinifyIdentifiers = true
+				buildOpts.Bundle = value
 			}
 
-		case arg == "--minify-syntax":
-			if buildOpts != nil {
-				buildOpts.MinifySyntax = true
+		case isBoolFlag(arg, "--preserve-symlinks") && buildOpts != nil:
+			if value, err := parseBoolFlag(arg, true); err != nil {
+				return parseOptionsExtras{}, err
 			} else {
-				transformOpts.MinifySyntax = true
+				buildOpts.PreserveSymlinks = value
 			}
 
-		case arg == "--minify-whitespace":
-			if buildOpts != nil {
-				buildOpts.MinifyWhitespace = true
+		case isBoolFlag(arg, "--splitting") && buildOpts != nil:
+			if value, err := parseBoolFlag(arg, true); err != nil {
+				return parseOptionsExtras{}, err
 			} else {
-				transformOpts.MinifyWhitespace = true
+				buildOpts.Splitting = value
 			}
 
-		case arg == "--minify-identifiers":
-			if buildOpts != nil {
-				buildOpts.MinifyIdentifiers = true
+		case isBoolFlag(arg, "--allow-overwrite") && buildOpts != nil:
+			if value, err := parseBoolFlag(arg, true); err != nil {
+				return parseOptionsExtras{}, err
 			} else {
-				transformOpts.MinifyIdentifiers = true
+				buildOpts.AllowOverwrite = value
+			}
+
+		case isBoolFlag(arg, "--watch") && buildOpts != nil:
+			if value, err := parseBoolFlag(arg, true); err != nil {
+				return parseOptionsExtras{}, err
+			} else if value {
+				buildOpts.Watch = &api.WatchMode{}
+			} else {
+				buildOpts.Watch = nil
+			}
+
+		case isBoolFlag(arg, "--minify"):
+			if value, err := parseBoolFlag(arg, true); err != nil {
+				return parseOptionsExtras{}, err
+			} else if buildOpts != nil {
+				buildOpts.MinifySyntax = value
+				buildOpts.MinifyWhitespace = value
+				buildOpts.MinifyIdentifiers = value
+			} else {
+				transformOpts.MinifySyntax = value
+				transformOpts.MinifyWhitespace = value
+				transformOpts.MinifyIdentifiers = value
+			}
+
+		case isBoolFlag(arg, "--minify-syntax"):
+			if value, err := parseBoolFlag(arg, true); err != nil {
+				return parseOptionsExtras{}, err
+			} else if buildOpts != nil {
+				buildOpts.MinifySyntax = value
+			} else {
+				transformOpts.MinifySyntax = value
+			}
+
+		case isBoolFlag(arg, "--minify-whitespace"):
+			if value, err := parseBoolFlag(arg, true); err != nil {
+				return parseOptionsExtras{}, err
+			} else if buildOpts != nil {
+				buildOpts.MinifyWhitespace = value
+			} else {
+				transformOpts.MinifyWhitespace = value
+			}
+
+		case isBoolFlag(arg, "--minify-identifiers"):
+			if value, err := parseBoolFlag(arg, true); err != nil {
+				return parseOptionsExtras{}, err
+			} else if buildOpts != nil {
+				buildOpts.MinifyIdentifiers = value
+			} else {
+				transformOpts.MinifyIdentifiers = value
+			}
+
+		case isBoolFlag(arg, "--mangle-quoted"):
+			if value, err := parseBoolFlag(arg, true); err != nil {
+				return parseOptionsExtras{}, err
+			} else {
+				var mangleQuoted *api.MangleQuoted
+				if buildOpts != nil {
+					mangleQuoted = &buildOpts.MangleQuoted
+				} else {
+					mangleQuoted = &transformOpts.MangleQuoted
+				}
+				if value {
+					*mangleQuoted = api.MangleQuotedTrue
+				} else {
+					*mangleQuoted = api.MangleQuotedFalse
+				}
+			}
+
+		case strings.HasPrefix(arg, "--mangle-props="):
+			value := arg[len("--mangle-props="):]
+			if buildOpts != nil {
+				buildOpts.MangleProps = value
+			} else {
+				transformOpts.MangleProps = value
+			}
+
+		case strings.HasPrefix(arg, "--reserve-props="):
+			value := arg[len("--reserve-props="):]
+			if buildOpts != nil {
+				buildOpts.ReserveProps = value
+			} else {
+				transformOpts.ReserveProps = value
+			}
+
+		case strings.HasPrefix(arg, "--mangle-cache=") && buildOpts != nil && kind == kindInternal:
+			value := arg[len("--mangle-cache="):]
+			extras.mangleCache = &value
+
+		case strings.HasPrefix(arg, "--drop:"):
+			value := arg[len("--drop:"):]
+			switch value {
+			case "console":
+				if buildOpts != nil {
+					buildOpts.Drop |= api.DropConsole
+				} else {
+					transformOpts.Drop |= api.DropConsole
+				}
+			case "debugger":
+				if buildOpts != nil {
+					buildOpts.Drop |= api.DropDebugger
+				} else {
+					transformOpts.Drop |= api.DropDebugger
+				}
+			default:
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+					fmt.Sprintf("Invalid value %q in %q", value, arg),
+					"Valid values are \"console\" or \"debugger\".",
+				)
 			}
 
 		case strings.HasPrefix(arg, "--legal-comments="):
@@ -110,7 +238,10 @@ func parseOptionsImpl(
 			case "external":
 				legalComments = api.LegalCommentsExternal
 			default:
-				return fmt.Errorf("Invalid legal comments value: %q (valid: none, inline, eof, linked, external)", value), nil
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+					fmt.Sprintf("Invalid value %q in %q", value, arg),
+					"Valid values are \"none\", \"inline\", \"eof\", \"linked\", or \"external\".",
+				)
 			}
 			if buildOpts != nil {
 				buildOpts.LegalComments = legalComments
@@ -132,38 +263,45 @@ func parseOptionsImpl(
 			case "utf8":
 				*value = api.CharsetUTF8
 			default:
-				return fmt.Errorf("Invalid charset value: %q (valid: ascii, utf8)", name), nil
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+					fmt.Sprintf("Invalid value %q in %q", name, arg),
+					"Valid values are \"ascii\" or \"utf8\".",
+				)
 			}
 
-		case strings.HasPrefix(arg, "--tree-shaking="):
-			var value *api.TreeShaking
-			if buildOpts != nil {
-				value = &buildOpts.TreeShaking
+		case isBoolFlag(arg, "--tree-shaking"):
+			if value, err := parseBoolFlag(arg, true); err != nil {
+				return parseOptionsExtras{}, err
 			} else {
-				value = &transformOpts.TreeShaking
-			}
-			name := arg[len("--tree-shaking="):]
-			switch name {
-			case "false":
-				*value = api.TreeShakingFalse
-			case "true":
-				*value = api.TreeShakingTrue
-			default:
-				return fmt.Errorf("Invalid tree shaking value: %q (valid: false, true)", name), nil
-			}
-
-		case arg == "--ignore-annotations":
-			if buildOpts != nil {
-				buildOpts.IgnoreAnnotations = true
-			} else {
-				transformOpts.IgnoreAnnotations = true
+				var treeShaking *api.TreeShaking
+				if buildOpts != nil {
+					treeShaking = &buildOpts.TreeShaking
+				} else {
+					treeShaking = &transformOpts.TreeShaking
+				}
+				if value {
+					*treeShaking = api.TreeShakingTrue
+				} else {
+					*treeShaking = api.TreeShakingFalse
+				}
 			}
 
-		case arg == "--keep-names":
-			if buildOpts != nil {
-				buildOpts.KeepNames = true
+		case isBoolFlag(arg, "--ignore-annotations"):
+			if value, err := parseBoolFlag(arg, true); err != nil {
+				return parseOptionsExtras{}, err
+			} else if buildOpts != nil {
+				buildOpts.IgnoreAnnotations = value
 			} else {
-				transformOpts.KeepNames = true
+				transformOpts.IgnoreAnnotations = value
+			}
+
+		case isBoolFlag(arg, "--keep-names"):
+			if value, err := parseBoolFlag(arg, true); err != nil {
+				return parseOptionsExtras{}, err
+			} else if buildOpts != nil {
+				buildOpts.KeepNames = value
+			} else {
+				transformOpts.KeepNames = value
 			}
 
 		case arg == "--sourcemap":
@@ -178,6 +316,8 @@ func parseOptionsImpl(
 			value := arg[len("--sourcemap="):]
 			var sourcemap api.SourceMap
 			switch value {
+			case "linked":
+				sourcemap = api.SourceMapLinked
 			case "inline":
 				sourcemap = api.SourceMapInline
 			case "external":
@@ -185,7 +325,10 @@ func parseOptionsImpl(
 			case "both":
 				sourcemap = api.SourceMapInlineAndExternal
 			default:
-				return fmt.Errorf("Invalid sourcemap: %q (valid: inline, external, both)", value), nil
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+					fmt.Sprintf("Invalid value %q in %q", value, arg),
+					"Valid values are \"inline\", \"external\", or \"both\".",
+				)
 			}
 			if buildOpts != nil {
 				buildOpts.Sourcemap = sourcemap
@@ -202,21 +345,21 @@ func parseOptionsImpl(
 				transformOpts.SourceRoot = sourceRoot
 			}
 
-		case strings.HasPrefix(arg, "--sources-content="):
-			value := arg[len("--sources-content="):]
-			var sourcesContent api.SourcesContent
-			switch value {
-			case "false":
-				sourcesContent = api.SourcesContentExclude
-			case "true":
-				sourcesContent = api.SourcesContentInclude
-			default:
-				return fmt.Errorf("Invalid sources content: %q (valid: false, true)", value), nil
-			}
-			if buildOpts != nil {
-				buildOpts.SourcesContent = sourcesContent
+		case isBoolFlag(arg, "--sources-content"):
+			if value, err := parseBoolFlag(arg, true); err != nil {
+				return parseOptionsExtras{}, err
 			} else {
-				transformOpts.SourcesContent = sourcesContent
+				var sourcesContent *api.SourcesContent
+				if buildOpts != nil {
+					sourcesContent = &buildOpts.SourcesContent
+				} else {
+					sourcesContent = &transformOpts.SourcesContent
+				}
+				if value {
+					*sourcesContent = api.SourcesContentInclude
+				} else {
+					*sourcesContent = api.SourcesContentExclude
+				}
 			}
 
 		case strings.HasPrefix(arg, "--sourcefile="):
@@ -230,13 +373,13 @@ func parseOptionsImpl(
 			}
 
 		case strings.HasPrefix(arg, "--resolve-extensions=") && buildOpts != nil:
-			buildOpts.ResolveExtensions = strings.Split(arg[len("--resolve-extensions="):], ",")
+			buildOpts.ResolveExtensions = splitWithEmptyCheck(arg[len("--resolve-extensions="):], ",")
 
 		case strings.HasPrefix(arg, "--main-fields=") && buildOpts != nil:
-			buildOpts.MainFields = strings.Split(arg[len("--main-fields="):], ",")
+			buildOpts.MainFields = splitWithEmptyCheck(arg[len("--main-fields="):], ",")
 
 		case strings.HasPrefix(arg, "--conditions=") && buildOpts != nil:
-			buildOpts.Conditions = strings.Split(arg[len("--conditions="):], ",")
+			buildOpts.Conditions = splitWithEmptyCheck(arg[len("--conditions="):], ",")
 
 		case strings.HasPrefix(arg, "--public-path=") && buildOpts != nil:
 			buildOpts.PublicPath = arg[len("--public-path="):]
@@ -248,13 +391,13 @@ func parseOptionsImpl(
 				transformOpts.GlobalName = arg[len("--global-name="):]
 			}
 
-		case strings.HasPrefix(arg, "--metafile") && buildOpts != nil && kind == kindExternal:
+		case arg == "--metafile" && buildOpts != nil && kind == kindExternal:
 			buildOpts.Metafile = true
 
 		case strings.HasPrefix(arg, "--metafile=") && buildOpts != nil && kind == kindInternal:
-			metafilePath := arg[len("--metafile="):]
+			value := arg[len("--metafile="):]
 			buildOpts.Metafile = true
-			metafile = &metafilePath
+			extras.metafile = &value
 
 		case strings.HasPrefix(arg, "--outfile=") && buildOpts != nil:
 			buildOpts.Outfile = arg[len("--outfile="):]
@@ -284,12 +427,54 @@ func parseOptionsImpl(
 			value := arg[len("--define:"):]
 			equals := strings.IndexByte(value, '=')
 			if equals == -1 {
-				return fmt.Errorf("Missing \"=\": %q", value), nil
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+					fmt.Sprintf("Missing \"=\" in %q", arg),
+					"You need to use \"=\" to specify both the original value and the replacement value. "+
+						"For example, \"--define:DEBUG=true\" replaces \"DEBUG\" with \"true\".",
+				)
 			}
 			if buildOpts != nil {
 				buildOpts.Define[value[:equals]] = value[equals+1:]
 			} else {
 				transformOpts.Define[value[:equals]] = value[equals+1:]
+			}
+
+		case strings.HasPrefix(arg, "--log-override:"):
+			value := arg[len("--log-override:"):]
+			equals := strings.IndexByte(value, '=')
+			if equals == -1 {
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+					fmt.Sprintf("Missing \"=\" in %q", arg),
+					"You need to use \"=\" to specify both the message name and the log level. "+
+						"For example, \"--log-override:css-syntax-error=error\" turns all \"css-syntax-error\" log messages into errors.",
+				)
+			}
+			logLevel, err := parseLogLevel(value[equals+1:], arg)
+			if err != nil {
+				return parseOptionsExtras{}, err
+			}
+			if buildOpts != nil {
+				buildOpts.LogOverride[value[:equals]] = logLevel
+			} else {
+				transformOpts.LogOverride[value[:equals]] = logLevel
+			}
+
+		case strings.HasPrefix(arg, "--supported:"):
+			value := arg[len("--supported:"):]
+			equals := strings.IndexByte(value, '=')
+			if equals == -1 {
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+					fmt.Sprintf("Missing \"=\" in %q", arg),
+					"You need to use \"=\" to specify both the name of the feature and whether it is supported or not. "+
+						"For example, \"--supported:arrow=false\" marks arrow functions as unsupported.",
+				)
+			}
+			if isSupported, err := parseBoolFlag(arg, true); err != nil {
+				return parseOptionsExtras{}, err
+			} else if buildOpts != nil {
+				buildOpts.Supported[value[:equals]] = isSupported
+			} else {
+				transformOpts.Supported[value[:equals]] = isSupported
 			}
 
 		case strings.HasPrefix(arg, "--pure:"):
@@ -304,12 +489,16 @@ func parseOptionsImpl(
 			value := arg[len("--loader:"):]
 			equals := strings.IndexByte(value, '=')
 			if equals == -1 {
-				return fmt.Errorf("Missing \"=\": %q", value), nil
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+					fmt.Sprintf("Missing \"=\" in %q", arg),
+					"You need to specify the file extension that the loader applies to. "+
+						"For example, \"--loader:.js=jsx\" applies the \"jsx\" loader to files with the \".js\" extension.",
+				)
 			}
 			ext, text := value[:equals], value[equals+1:]
 			loader, err := cli_helpers.ParseLoader(text)
 			if err != nil {
-				return err, nil
+				return parseOptionsExtras{}, err
 			}
 			buildOpts.Loader[ext] = loader
 
@@ -317,10 +506,14 @@ func parseOptionsImpl(
 			value := arg[len("--loader="):]
 			loader, err := cli_helpers.ParseLoader(value)
 			if err != nil {
-				return err, nil
+				return parseOptionsExtras{}, err
 			}
-			if loader == api.LoaderFile {
-				return fmt.Errorf("Cannot transform using the \"file\" loader"), nil
+			if loader == api.LoaderFile || loader == api.LoaderCopy {
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+					fmt.Sprintf("%q is not supported when transforming stdin", arg),
+					fmt.Sprintf("Using esbuild to transform stdin only generates one output file, so you cannot use the %q loader "+
+						"since that needs to generate two output files.", value),
+				)
 			}
 			if buildOpts != nil {
 				if buildOpts.Stdin == nil {
@@ -332,9 +525,9 @@ func parseOptionsImpl(
 			}
 
 		case strings.HasPrefix(arg, "--target="):
-			target, engines, err := parseTargets(strings.Split(arg[len("--target="):], ","))
+			target, engines, err := parseTargets(splitWithEmptyCheck(arg[len("--target="):], ","), arg)
 			if err != nil {
-				return err, nil
+				return parseOptionsExtras{}, err
 			}
 			if buildOpts != nil {
 				buildOpts.Target = target
@@ -348,49 +541,59 @@ func parseOptionsImpl(
 			value := arg[len("--out-extension:"):]
 			equals := strings.IndexByte(value, '=')
 			if equals == -1 {
-				return fmt.Errorf("Missing \"=\": %q", value), nil
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+					fmt.Sprintf("Missing \"=\" in %q", arg),
+					"You need to use either \"--out-extension:.js=...\" or \"--out-extension:.css=...\" "+
+						"to specify the file type that the output extension applies to .",
+				)
 			}
-			if buildOpts.OutExtensions == nil {
-				buildOpts.OutExtensions = make(map[string]string)
+			if buildOpts.OutExtension == nil {
+				buildOpts.OutExtension = make(map[string]string)
 			}
-			buildOpts.OutExtensions[value[:equals]] = value[equals+1:]
+			buildOpts.OutExtension[value[:equals]] = value[equals+1:]
 
-		case strings.HasPrefix(arg, "--platform=") && buildOpts != nil:
+		case strings.HasPrefix(arg, "--platform="):
 			value := arg[len("--platform="):]
+			var platform api.Platform
 			switch value {
 			case "browser":
-				buildOpts.Platform = api.PlatformBrowser
+				platform = api.PlatformBrowser
 			case "node":
-				buildOpts.Platform = api.PlatformNode
+				platform = api.PlatformNode
 			case "neutral":
-				buildOpts.Platform = api.PlatformNeutral
+				platform = api.PlatformNeutral
 			default:
-				return fmt.Errorf("Invalid platform: %q (valid: browser, node, neutral)", value), nil
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+					fmt.Sprintf("Invalid value %q in %q", value, arg),
+					"Valid values are \"browser\", \"node\", or \"neutral\".",
+				)
+			}
+			if buildOpts != nil {
+				buildOpts.Platform = platform
+			} else {
+				transformOpts.Platform = platform
 			}
 
 		case strings.HasPrefix(arg, "--format="):
 			value := arg[len("--format="):]
+			var format api.Format
 			switch value {
 			case "iife":
-				if buildOpts != nil {
-					buildOpts.Format = api.FormatIIFE
-				} else {
-					transformOpts.Format = api.FormatIIFE
-				}
+				format = api.FormatIIFE
 			case "cjs":
-				if buildOpts != nil {
-					buildOpts.Format = api.FormatCommonJS
-				} else {
-					transformOpts.Format = api.FormatCommonJS
-				}
+				format = api.FormatCommonJS
 			case "esm":
-				if buildOpts != nil {
-					buildOpts.Format = api.FormatESModule
-				} else {
-					transformOpts.Format = api.FormatESModule
-				}
+				format = api.FormatESModule
 			default:
-				return fmt.Errorf("Invalid format: %q (valid: iife, cjs, esm)", value), nil
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+					fmt.Sprintf("Invalid value %q in %q", value, arg),
+					"Valid values are \"iife\", \"cjs\", or \"esm\".",
+				)
+			}
+			if buildOpts != nil {
+				buildOpts.Format = format
+			} else {
+				transformOpts.Format = format
 			}
 
 		case strings.HasPrefix(arg, "--external:") && buildOpts != nil:
@@ -399,19 +602,39 @@ func parseOptionsImpl(
 		case strings.HasPrefix(arg, "--inject:") && buildOpts != nil:
 			buildOpts.Inject = append(buildOpts.Inject, arg[len("--inject:"):])
 
+		case strings.HasPrefix(arg, "--alias:") && buildOpts != nil:
+			value := arg[len("--alias:"):]
+			equals := strings.IndexByte(value, '=')
+			if equals == -1 {
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+					fmt.Sprintf("Missing \"=\" in %q", arg),
+					"You need to use \"=\" to specify both the original package name and the replacement package name. "+
+						"For example, \"--alias:old=new\" replaces package \"old\" with package \"new\".",
+				)
+			}
+			if buildOpts.Alias == nil {
+				buildOpts.Alias = make(map[string]string)
+			}
+			buildOpts.Alias[value[:equals]] = value[equals+1:]
+
 		case strings.HasPrefix(arg, "--jsx="):
 			value := arg[len("--jsx="):]
-			var mode api.JSXMode
+			var mode api.JSX
 			switch value {
 			case "transform":
-				mode = api.JSXModeTransform
+				mode = api.JSXTransform
 			case "preserve":
-				mode = api.JSXModePreserve
+				mode = api.JSXPreserve
+			case "automatic":
+				mode = api.JSXAutomatic
 			default:
-				return fmt.Errorf("Invalid jsx: %q (valid: transform, preserve)", value), nil
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+					fmt.Sprintf("Invalid value %q in %q", value, arg),
+					"Valid values are \"transform\", \"automatic\", or \"preserve\".",
+				)
 			}
 			if buildOpts != nil {
-				buildOpts.JSXMode = mode
+				buildOpts.JSX = mode
 			} else {
 				transformOpts.JSXMode = mode
 			}
@@ -432,6 +655,32 @@ func parseOptionsImpl(
 				transformOpts.JSXFragment = value
 			}
 
+		case strings.HasPrefix(arg, "--jsx-import-source="):
+			value := arg[len("--jsx-import-source="):]
+			if buildOpts != nil {
+				buildOpts.JSXImportSource = value
+			} else {
+				transformOpts.JSXImportSource = value
+			}
+
+		case isBoolFlag(arg, "--jsx-dev"):
+			if value, err := parseBoolFlag(arg, true); err != nil {
+				return parseOptionsExtras{}, err
+			} else if buildOpts != nil {
+				buildOpts.JSXDev = value
+			} else {
+				transformOpts.JSXDev = value
+			}
+
+		case isBoolFlag(arg, "--jsx-side-effects"):
+			if value, err := parseBoolFlag(arg, true); err != nil {
+				return parseOptionsExtras{}, err
+			} else if buildOpts != nil {
+				buildOpts.JSXSideEffects = value
+			} else {
+				transformOpts.JSXSideEffects = value
+			}
+
 		case strings.HasPrefix(arg, "--banner=") && transformOpts != nil:
 			transformOpts.Banner = arg[len("--banner="):]
 
@@ -442,7 +691,10 @@ func parseOptionsImpl(
 			value := arg[len("--banner:"):]
 			equals := strings.IndexByte(value, '=')
 			if equals == -1 {
-				return fmt.Errorf("Missing \"=\": %q", value), nil
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+					fmt.Sprintf("Missing \"=\" in %q", arg),
+					"You need to use either \"--banner:js=...\" or \"--banner:css=...\" to specify the language that the banner applies to.",
+				)
 			}
 			buildOpts.Banner[value[:equals]] = value[equals+1:]
 
@@ -450,7 +702,10 @@ func parseOptionsImpl(
 			value := arg[len("--footer:"):]
 			equals := strings.IndexByte(value, '=')
 			if equals == -1 {
-				return fmt.Errorf("Missing \"=\": %q", value), nil
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+					fmt.Sprintf("Missing \"=\" in %q", arg),
+					"You need to use either \"--footer:js=...\" or \"--footer:css=...\" to specify the language that the footer applies to.",
+				)
 			}
 			buildOpts.Footer[value[:equals]] = value[equals+1:]
 
@@ -458,7 +713,10 @@ func parseOptionsImpl(
 			value := arg[len("--log-limit="):]
 			limit, err := strconv.Atoi(value)
 			if err != nil || limit < 0 {
-				return fmt.Errorf("Invalid log limit: %q", value), nil
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+					fmt.Sprintf("Invalid value %q in %q", value, arg),
+					"The log limit must be a non-negative integer.",
+				)
 			}
 			if buildOpts != nil {
 				buildOpts.LogLimit = limit
@@ -467,42 +725,29 @@ func parseOptionsImpl(
 			}
 
 			// Make sure this stays in sync with "PrintErrorToStderr"
-		case strings.HasPrefix(arg, "--color="):
-			value := arg[len("--color="):]
-			var color api.StderrColor
-			switch value {
-			case "false":
-				color = api.ColorNever
-			case "true":
-				color = api.ColorAlways
-			default:
-				return fmt.Errorf("Invalid color: %q (valid: false, true)", value), nil
-			}
-			if buildOpts != nil {
-				buildOpts.Color = color
+		case isBoolFlag(arg, "--color"):
+			if value, err := parseBoolFlag(arg, true); err != nil {
+				return parseOptionsExtras{}, err
 			} else {
-				transformOpts.Color = color
+				var color *api.StderrColor
+				if buildOpts != nil {
+					color = &buildOpts.Color
+				} else {
+					color = &transformOpts.Color
+				}
+				if value {
+					*color = api.ColorAlways
+				} else {
+					*color = api.ColorNever
+				}
 			}
 
 		// Make sure this stays in sync with "PrintErrorToStderr"
 		case strings.HasPrefix(arg, "--log-level="):
 			value := arg[len("--log-level="):]
-			var logLevel api.LogLevel
-			switch value {
-			case "verbose":
-				logLevel = api.LogLevelVerbose
-			case "debug":
-				logLevel = api.LogLevelDebug
-			case "info":
-				logLevel = api.LogLevelInfo
-			case "warning":
-				logLevel = api.LogLevelWarning
-			case "error":
-				logLevel = api.LogLevelError
-			case "silent":
-				logLevel = api.LogLevelSilent
-			default:
-				return fmt.Errorf("Invalid log level: %q (valid: verbose, debug, info, warning, error, silent)", arg), nil
+			logLevel, err := parseLogLevel(value, arg)
+			if err != nil {
+				return parseOptionsExtras{}, err
 			}
 			if buildOpts != nil {
 				buildOpts.LogLevel = logLevel
@@ -511,7 +756,11 @@ func parseOptionsImpl(
 			}
 
 		case strings.HasPrefix(arg, "'--"):
-			return fmt.Errorf("Unexpected single quote character before flag (use \\\" to escape double quotes): %s", arg), nil
+			return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+				fmt.Sprintf("Unexpected single quote character before flag: %s", arg),
+				"This typically happens when attempting to use single quotes to quote arguments with a shell that doesn't recognize single quotes. "+
+					"Try using double quote characters to quote arguments instead.",
+			)
 
 		case !strings.HasPrefix(arg, "-") && buildOpts != nil:
 			if equals := strings.IndexByte(arg, '='); equals != -1 {
@@ -524,10 +773,137 @@ func parseOptionsImpl(
 			}
 
 		default:
+			bare := map[string]bool{
+				"allow-overwrite":    true,
+				"bundle":             true,
+				"ignore-annotations": true,
+				"jsx-dev":            true,
+				"jsx-side-effects":   true,
+				"keep-names":         true,
+				"minify-identifiers": true,
+				"minify-syntax":      true,
+				"minify-whitespace":  true,
+				"minify":             true,
+				"preserve-symlinks":  true,
+				"sourcemap":          true,
+				"splitting":          true,
+				"watch":              true,
+			}
+
+			equals := map[string]bool{
+				"allow-overwrite":    true,
+				"asset-names":        true,
+				"banner":             true,
+				"bundle":             true,
+				"charset":            true,
+				"chunk-names":        true,
+				"color":              true,
+				"conditions":         true,
+				"entry-names":        true,
+				"footer":             true,
+				"format":             true,
+				"global-name":        true,
+				"ignore-annotations": true,
+				"jsx-factory":        true,
+				"jsx-fragment":       true,
+				"jsx-import-source":  true,
+				"jsx":                true,
+				"keep-names":         true,
+				"legal-comments":     true,
+				"loader":             true,
+				"log-level":          true,
+				"log-limit":          true,
+				"main-fields":        true,
+				"mangle-cache":       true,
+				"mangle-props":       true,
+				"mangle-quoted":      true,
+				"metafile":           true,
+				"minify-identifiers": true,
+				"minify-syntax":      true,
+				"minify-whitespace":  true,
+				"minify":             true,
+				"outbase":            true,
+				"outdir":             true,
+				"outfile":            true,
+				"platform":           true,
+				"preserve-symlinks":  true,
+				"public-path":        true,
+				"reserve-props":      true,
+				"resolve-extensions": true,
+				"source-root":        true,
+				"sourcefile":         true,
+				"sourcemap":          true,
+				"sources-content":    true,
+				"splitting":          true,
+				"target":             true,
+				"tree-shaking":       true,
+				"tsconfig-raw":       true,
+				"tsconfig":           true,
+				"watch":              true,
+			}
+
+			colon := map[string]bool{
+				"alias":         true,
+				"banner":        true,
+				"define":        true,
+				"drop":          true,
+				"external":      true,
+				"footer":        true,
+				"inject":        true,
+				"loader":        true,
+				"log-override":  true,
+				"out-extension": true,
+				"pure":          true,
+				"supported":     true,
+			}
+
+			note := ""
+
+			// Try to provide helpful hints when we can recognize the mistake
+			switch {
+			case arg == "-o":
+				note = "Use \"--outfile=\" to configure the output file instead of \"-o\"."
+
+			case arg == "-v":
+				note = "Use \"--log-level=verbose\" to generate verbose logs instead of \"-v\"."
+
+			case strings.HasPrefix(arg, "--"):
+				if i := strings.IndexByte(arg, '='); i != -1 && colon[arg[2:i]] {
+					note = fmt.Sprintf("Use %q instead of %q. Flags that can be re-specified multiple times use \":\" instead of \"=\".",
+						arg[:i]+":"+arg[i+1:], arg)
+				}
+
+				if i := strings.IndexByte(arg, ':'); i != -1 && equals[arg[2:i]] {
+					note = fmt.Sprintf("Use %q instead of %q. Flags that can only be specified once use \"=\" instead of \":\".",
+						arg[:i]+"="+arg[i+1:], arg)
+				}
+
+			case strings.HasPrefix(arg, "-"):
+				isValid := bare[arg[1:]]
+				fix := "-" + arg
+
+				if i := strings.IndexByte(arg, '='); i != -1 && equals[arg[1:i]] {
+					isValid = true
+				} else if i != -1 && colon[arg[1:i]] {
+					isValid = true
+					fix = fmt.Sprintf("-%s:%s", arg[:i], arg[i+1:])
+				} else if i := strings.IndexByte(arg, ':'); i != -1 && colon[arg[1:i]] {
+					isValid = true
+				} else if i != -1 && equals[arg[1:i]] {
+					isValid = true
+					fix = fmt.Sprintf("-%s=%s", arg[:i], arg[i+1:])
+				}
+
+				if isValid {
+					note = fmt.Sprintf("Use %q instead of %q. Flags are always specified with two dashes instead of one dash.",
+						fix, arg)
+				}
+			}
+
 			if buildOpts != nil {
-				return fmt.Errorf("Invalid build flag: %q", arg), nil
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(fmt.Sprintf("Invalid build flag: %q", arg), note)
 			} else {
-				return fmt.Errorf("Invalid transform flag: %q", arg), nil
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(fmt.Sprintf("Invalid transform flag: %q", arg), note)
 			}
 		}
 	}
@@ -542,7 +918,7 @@ func parseOptionsImpl(
 	return
 }
 
-func parseTargets(targets []string) (target api.Target, engines []api.Engine, err error) {
+func parseTargets(targets []string, arg string) (target api.Target, engines []api.Engine, err *cli_helpers.ErrorWithNote) {
 	validTargets := map[string]api.Target{
 		"esnext": api.ESNext,
 		"es5":    api.ES5,
@@ -554,20 +930,12 @@ func parseTargets(targets []string) (target api.Target, engines []api.Engine, er
 		"es2019": api.ES2019,
 		"es2020": api.ES2020,
 		"es2021": api.ES2021,
-	}
-
-	validEngines := map[string]api.EngineName{
-		"chrome":  api.EngineChrome,
-		"firefox": api.EngineFirefox,
-		"safari":  api.EngineSafari,
-		"edge":    api.EngineEdge,
-		"node":    api.EngineNode,
-		"ios":     api.EngineIOS,
+		"es2022": api.ES2022,
 	}
 
 outer:
 	for _, value := range targets {
-		if valid, ok := validTargets[value]; ok {
+		if valid, ok := validTargets[strings.ToLower(value)]; ok {
 			target = valid
 			continue
 		}
@@ -576,41 +944,48 @@ outer:
 			if strings.HasPrefix(value, engine) {
 				version := value[len(engine):]
 				if version == "" {
-					return 0, nil, fmt.Errorf("Target missing version number: %q", value)
+					return 0, nil, cli_helpers.MakeErrorWithNote(
+						fmt.Sprintf("Target %q is missing a version number in %q", value, arg),
+						"",
+					)
 				}
 				engines = append(engines, api.Engine{Name: name, Version: version})
 				continue outer
 			}
 		}
 
-		var engines []string
+		engines := make([]string, 0, len(validEngines))
+		engines = append(engines, "\"esN\"")
 		for key := range validEngines {
-			engines = append(engines, key+"N")
+			engines = append(engines, fmt.Sprintf("%q", key+"N"))
 		}
 		sort.Strings(engines)
-		return 0, nil, fmt.Errorf(
-			"Invalid target: %q (valid: esN, "+strings.Join(engines, ", ")+")", value)
+		return 0, nil, cli_helpers.MakeErrorWithNote(
+			fmt.Sprintf("Invalid target %q in %q", value, arg),
+			fmt.Sprintf("Valid values are %s, or %s where N is a version number.",
+				strings.Join(engines[:len(engines)-1], ", "), engines[len(engines)-1]),
+		)
 	}
 	return
 }
 
 // This returns either BuildOptions, TransformOptions, or an error
-func parseOptionsForRun(osArgs []string) (*api.BuildOptions, *string, *api.TransformOptions, error) {
+func parseOptionsForRun(osArgs []string) (*api.BuildOptions, *api.TransformOptions, parseOptionsExtras, *cli_helpers.ErrorWithNote) {
 	// If there's an entry point or we're bundling, then we're building
 	for _, arg := range osArgs {
 		if !strings.HasPrefix(arg, "-") || arg == "--bundle" {
 			options := newBuildOptions()
 
 			// Apply defaults appropriate for the CLI
-			options.LogLimit = 10
+			options.LogLimit = 6
 			options.LogLevel = api.LogLevelInfo
 			options.Write = true
 
-			err, metafile := parseOptionsImpl(osArgs, &options, nil, kindInternal)
+			extras, err := parseOptionsImpl(osArgs, &options, nil, kindInternal)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, parseOptionsExtras{}, err
 			}
-			return &options, metafile, nil, nil
+			return &options, nil, extras, nil
 		}
 	}
 
@@ -618,17 +993,39 @@ func parseOptionsForRun(osArgs []string) (*api.BuildOptions, *string, *api.Trans
 	options := newTransformOptions()
 
 	// Apply defaults appropriate for the CLI
-	options.LogLimit = 10
+	options.LogLimit = 6
 	options.LogLevel = api.LogLevelInfo
 
-	err, _ := parseOptionsImpl(osArgs, nil, &options, kindInternal)
+	_, err := parseOptionsImpl(osArgs, nil, &options, kindInternal)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, parseOptionsExtras{}, err
 	}
 	if options.Sourcemap != api.SourceMapNone && options.Sourcemap != api.SourceMapInline {
-		return nil, nil, nil, fmt.Errorf("Must use \"inline\" source map when transforming stdin")
+		var sourceMapMode string
+		switch options.Sourcemap {
+		case api.SourceMapExternal:
+			sourceMapMode = "external"
+		case api.SourceMapInlineAndExternal:
+			sourceMapMode = "both"
+		case api.SourceMapLinked:
+			sourceMapMode = "linked"
+		}
+		return nil, nil, parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+			fmt.Sprintf("Use \"--sourcemap\" instead of \"--sourcemap=%s\" when transforming stdin", sourceMapMode),
+			fmt.Sprintf("Using esbuild to transform stdin only generates one output file. You cannot use the %q source map mode "+
+				"since that needs to generate two output files.", sourceMapMode),
+		)
 	}
-	return nil, nil, &options, nil
+	return nil, &options, parseOptionsExtras{}, nil
+}
+
+func splitWithEmptyCheck(s string, sep string) []string {
+	// Special-case the empty string to return [] instead of [""]
+	if s == "" {
+		return []string{}
+	}
+
+	return strings.Split(s, sep)
 }
 
 func runImpl(osArgs []string) int {
@@ -663,24 +1060,20 @@ func runImpl(osArgs []string) int {
 	}
 	osArgs = osArgs[:end]
 
-	buildOptions, metafile, transformOptions, err := parseOptionsForRun(osArgs)
+	buildOptions, transformOptions, extras, err := parseOptionsForRun(osArgs)
 
 	switch {
 	case buildOptions != nil:
-		for _, key := range os.Environ() {
-			// Read the "NODE_PATH" from the environment. This is part of node's
-			// module resolution algorithm. Documentation for this can be found here:
-			// https://nodejs.org/api/modules.html#modules_loading_from_the_global_folders
-			if strings.HasPrefix(key, "NODE_PATH=") {
-				value := key[len("NODE_PATH="):]
-				separator := ":"
-				if fs.CheckIfWindows() {
-					// On Windows, NODE_PATH is delimited by semicolons instead of colons
-					separator = ";"
-				}
-				buildOptions.NodePaths = strings.Split(value, separator)
-				break
+		// Read the "NODE_PATH" from the environment. This is part of node's
+		// module resolution algorithm. Documentation for this can be found here:
+		// https://nodejs.org/api/modules.html#modules_loading_from_the_global_folders
+		if value, ok := os.LookupEnv("NODE_PATH"); ok {
+			separator := ":"
+			if fs.CheckIfWindows() {
+				// On Windows, NODE_PATH is delimited by semicolons instead of colons
+				separator = ";"
 			}
+			buildOptions.NodePaths = splitWithEmptyCheck(value, separator)
 		}
 
 		// Read from stdin when there are no entry points
@@ -711,7 +1104,7 @@ func runImpl(osArgs []string) int {
 		// don't write any output files if it's incorrect. That makes this API
 		// option consistent with how we handle all other API options.
 		var writeMetafile func(string)
-		if metafile != nil {
+		if extras.metafile != nil {
 			var metafileAbsPath string
 			var metafileAbsDir string
 
@@ -722,9 +1115,9 @@ func runImpl(osArgs []string) int {
 			}
 			realFS, realFSErr := fs.RealFS(fs.RealFSOptions{AbsWorkingDir: buildOptions.AbsWorkingDir})
 			if realFSErr == nil {
-				absPath, ok := realFS.Abs(*metafile)
+				absPath, ok := realFS.Abs(*extras.metafile)
 				if !ok {
-					logger.PrintErrorToStderr(osArgs, fmt.Sprintf("Invalid metafile path: %s", *metafile))
+					logger.PrintErrorToStderr(osArgs, fmt.Sprintf("Invalid metafile path: %s", *extras.metafile))
 					return 1
 				}
 				metafileAbsPath = absPath
@@ -739,7 +1132,7 @@ func runImpl(osArgs []string) int {
 				}
 				if err != nil {
 					// This should already have been checked above
-					panic(err.Error())
+					panic(err.Text)
 				}
 				fs.BeforeFileOpen()
 				defer fs.AfterFileClose()
@@ -748,6 +1141,53 @@ func runImpl(osArgs []string) int {
 						"Failed to create output directory: %s", err.Error()))
 				} else {
 					if err := ioutil.WriteFile(metafileAbsPath, []byte(json), 0644); err != nil {
+						logger.PrintErrorToStderr(osArgs, fmt.Sprintf(
+							"Failed to write to output file: %s", err.Error()))
+					}
+				}
+			}
+		}
+
+		// Also validate the mangle cache absolute path and directory ahead of time
+		// for the same reason
+		var writeMangleCache func(map[string]interface{})
+		if extras.mangleCache != nil {
+			var mangleCacheAbsPath string
+			var mangleCacheAbsDir string
+			var mangleCacheOrder []string
+			realFS, realFSErr := fs.RealFS(fs.RealFSOptions{AbsWorkingDir: buildOptions.AbsWorkingDir})
+			if realFSErr == nil {
+				absPath, ok := realFS.Abs(*extras.mangleCache)
+				if !ok {
+					logger.PrintErrorToStderr(osArgs, fmt.Sprintf("Invalid mangle cache path: %s", *extras.mangleCache))
+					return 1
+				}
+				mangleCacheAbsPath = absPath
+				mangleCacheAbsDir = realFS.Dir(absPath)
+				buildOptions.MangleCache, mangleCacheOrder = parseMangleCache(osArgs, realFS, *extras.mangleCache)
+				if buildOptions.MangleCache == nil {
+					return 1 // Stop now if parsing failed
+				}
+			} else {
+				// Don't fail in this case since the error will be reported by "api.Build"
+			}
+
+			writeMangleCache = func(mangleCache map[string]interface{}) {
+				if mangleCache == nil || realFSErr != nil {
+					return // Don't write out the metafile on build errors
+				}
+				if err != nil {
+					// This should already have been checked above
+					panic(err.Text)
+				}
+				fs.BeforeFileOpen()
+				defer fs.AfterFileClose()
+				if err := fs.MkdirAll(realFS, mangleCacheAbsDir, 0755); err != nil {
+					logger.PrintErrorToStderr(osArgs, fmt.Sprintf(
+						"Failed to create output directory: %s", err.Error()))
+				} else {
+					bytes := printMangleCache(mangleCache, mangleCacheOrder, buildOptions.Charset == api.CharsetASCII)
+					if err := ioutil.WriteFile(mangleCacheAbsPath, bytes, 0644); err != nil {
 						logger.PrintErrorToStderr(osArgs, fmt.Sprintf(
 							"Failed to write to output file: %s", err.Error()))
 					}
@@ -786,6 +1226,11 @@ func runImpl(osArgs []string) int {
 			writeMetafile(result.Metafile)
 		}
 
+		// Write the mangle cache to the file system
+		if writeMangleCache != nil {
+			writeMangleCache(result.MangleCache)
+		}
+
 		// Do not exit if we're in watch mode
 		if buildOptions.Watch != nil {
 			<-make(chan bool)
@@ -815,7 +1260,14 @@ func runImpl(osArgs []string) int {
 		os.Stdout.Write(result.Code)
 
 	case err != nil:
-		logger.PrintErrorToStderr(osArgs, err.Error())
+		msg := logger.Msg{
+			Kind: logger.Error,
+			Data: logger.MsgData{Text: err.Text},
+		}
+		if err.Note != "" {
+			msg.Notes = []logger.MsgData{{Text: err.Note}}
+		}
+		logger.PrintMessageToStderr(osArgs, msg)
 		return 1
 	}
 
@@ -878,9 +1330,9 @@ func serveImpl(osArgs []string) error {
 	options.LogLimit = 5
 	options.LogLevel = api.LogLevelInfo
 
-	if err, _ := parseOptionsImpl(filteredArgs, &options, nil, kindInternal); err != nil {
-		logger.PrintErrorToStderr(filteredArgs, err.Error())
-		return err
+	if _, err := parseOptionsImpl(filteredArgs, &options, nil, kindInternal); err != nil {
+		logger.PrintErrorToStderr(filteredArgs, err.Text)
+		return errors.New(err.Text)
 	}
 
 	serveOptions.OnRequest = func(args api.ServeOnRequestArgs) {
@@ -949,4 +1401,26 @@ func serveImpl(osArgs []string) error {
 		return sb.String()
 	})
 	return result.Wait()
+}
+
+func parseLogLevel(value string, arg string) (api.LogLevel, *cli_helpers.ErrorWithNote) {
+	switch value {
+	case "verbose":
+		return api.LogLevelVerbose, nil
+	case "debug":
+		return api.LogLevelDebug, nil
+	case "info":
+		return api.LogLevelInfo, nil
+	case "warning":
+		return api.LogLevelWarning, nil
+	case "error":
+		return api.LogLevelError, nil
+	case "silent":
+		return api.LogLevelSilent, nil
+	default:
+		return api.LogLevelSilent, cli_helpers.MakeErrorWithNote(
+			fmt.Sprintf("Invalid value %q in %q", value, arg),
+			"Valid values are \"verbose\", \"debug\", \"info\", \"warning\", \"error\", or \"silent\".",
+		)
+	}
 }

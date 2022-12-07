@@ -1,5 +1,6 @@
 import * as types from "../shared/types"
 import * as common from "../shared/common"
+import * as ourselves from "./mod"
 import * as denoflate from "https://deno.land/x/denoflate@1.2.1/mod.ts"
 
 declare const ESBUILD_VERSION: string
@@ -22,6 +23,10 @@ export const formatMessages: typeof types.formatMessages = (messages, options) =
   ensureServiceIsRunning().then(service =>
     service.formatMessages(messages, options))
 
+export const analyzeMetafile: typeof types.analyzeMetafile = (metafile, options) =>
+  ensureServiceIsRunning().then(service =>
+    service.analyzeMetafile(metafile, options))
+
 export const buildSync: typeof types.buildSync = () => {
   throw new Error(`The "buildSync" API does not work in Deno`)
 }
@@ -34,6 +39,10 @@ export const formatMessagesSync: typeof types.formatMessagesSync = () => {
   throw new Error(`The "formatMessagesSync" API does not work in Deno`)
 }
 
+export const analyzeMetafileSync: typeof types.analyzeMetafileSync = () => {
+  throw new Error(`The "analyzeMetafileSync" API does not work in Deno`)
+}
+
 export const stop = () => {
   if (stopService) stopService()
 }
@@ -43,6 +52,7 @@ let initializeWasCalled = false
 export const initialize: typeof types.initialize = async (options) => {
   options = common.validateInitializeOptions(options || {})
   if (options.wasmURL) throw new Error(`The "wasmURL" option only works in the browser`)
+  if (options.wasmModule) throw new Error(`The "wasmModule" option only works in the browser`)
   if (options.worker) throw new Error(`The "worker" option only works in the browser`)
   if (initializeWasCalled) throw new Error('Cannot call "initialize" more than once')
   await ensureServiceIsRunning()
@@ -133,12 +143,17 @@ async function install(): Promise<string> {
 
   const platformKey = Deno.build.target
   const knownWindowsPackages: Record<string, string> = {
-    'x86_64-pc-windows-msvc': 'esbuild-windows-64',
+    'x86_64-pc-windows-msvc': '@esbuild/win32-x64',
   }
   const knownUnixlikePackages: Record<string, string> = {
-    'aarch64-apple-darwin': 'esbuild-darwin-arm64',
-    'x86_64-apple-darwin': 'esbuild-darwin-64',
-    'x86_64-unknown-linux-gnu': 'esbuild-linux-64',
+    // These are the only platforms that Deno supports
+    'aarch64-apple-darwin': '@esbuild/darwin-arm64',
+    'aarch64-unknown-linux-gnu': '@esbuild/linux-arm64',
+    'x86_64-apple-darwin': '@esbuild/darwin-x64',
+    'x86_64-unknown-linux-gnu': '@esbuild/linux-x64',
+
+    // These platforms are not supported by Deno
+    'x86_64-unknown-freebsd': '@esbuild/freebsd-x64',
   }
 
   // Pick a package to install
@@ -156,6 +171,7 @@ interface Service {
   serve: typeof types.serve
   transform: typeof types.transform
   formatMessages: typeof types.formatMessages
+  analyzeMetafile: typeof types.analyzeMetafile
 }
 
 let defaultWD = Deno.cwd()
@@ -207,13 +223,14 @@ let ensureServiceIsRunning = (): Promise<Service> => {
           startWriteFromQueueWorker()
         },
         isSync: false,
-        isBrowser: false,
+        isWriteUnavailable: false,
+        esbuild: ourselves,
       })
 
       const stdoutBuffer = new Uint8Array(4 * 1024 * 1024)
       const readMoreStdout = () => child.stdout.read(stdoutBuffer).then(n => {
         if (n === null) {
-          afterClose()
+          afterClose(null)
         } else {
           readFromStdout(stdoutBuffer.subarray(0, n))
           readMoreStdout()
@@ -221,7 +238,7 @@ let ensureServiceIsRunning = (): Promise<Service> => {
       }).catch(e => {
         if (e instanceof Deno.errors.Interrupted || e instanceof Deno.errors.BadResource) {
           // ignore the error if read was interrupted (stdout was closed)
-          afterClose()
+          afterClose(e)
         } else {
           throw e;
         }
@@ -242,6 +259,7 @@ let ensureServiceIsRunning = (): Promise<Service> => {
             })
           })
         },
+
         serve: (serveOptions, buildOptions) => {
           if (serveOptions === null || typeof serveOptions !== 'object')
             throw new Error('The first argument must be an object')
@@ -255,6 +273,7 @@ let ensureServiceIsRunning = (): Promise<Service> => {
               defaultWD, callback: (err, res) => err ? reject(err) : resolve(res as types.ServeResult),
             }))
         },
+
         transform: (input, options) => {
           return new Promise((resolve, reject) =>
             service.transform({
@@ -279,7 +298,7 @@ let ensureServiceIsRunning = (): Promise<Service> => {
                 },
                 writeFile(contents, callback) {
                   Deno.makeTempFile().then(
-                    tempFile => Deno.writeFile(tempFile, new TextEncoder().encode(contents)).then(
+                    tempFile => Deno.writeFile(tempFile, typeof contents === 'string' ? new TextEncoder().encode(contents) : contents).then(
                       () => callback(tempFile),
                       () => callback(null)),
                     () => callback(null))
@@ -288,6 +307,7 @@ let ensureServiceIsRunning = (): Promise<Service> => {
               callback: (err, res) => err ? reject(err) : resolve(res!),
             }))
         },
+
         formatMessages: (messages, options) => {
           return new Promise((resolve, reject) =>
             service.formatMessages({
@@ -298,8 +318,32 @@ let ensureServiceIsRunning = (): Promise<Service> => {
               callback: (err, res) => err ? reject(err) : resolve(res!),
             }))
         },
+
+        analyzeMetafile: (metafile, options) => {
+          return new Promise((resolve, reject) =>
+            service.analyzeMetafile({
+              callName: 'analyzeMetafile',
+              refs: null,
+              metafile: typeof metafile === 'string' ? metafile : JSON.stringify(metafile),
+              options,
+              callback: (err, res) => err ? reject(err) : resolve(res!),
+            }))
+        },
       }
     })()
   }
   return longLivedService
+}
+
+// If we're called as the main script, forward the CLI to the underlying executable
+if (import.meta.main) {
+  Deno.run({
+    cmd: [await install()].concat(Deno.args),
+    cwd: defaultWD,
+    stdin: 'inherit',
+    stdout: 'inherit',
+    stderr: 'inherit',
+  }).status().then(({ code }) => {
+    Deno.exit(code)
+  })
 }

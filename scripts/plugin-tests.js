@@ -194,7 +194,7 @@ let pluginTests = {
         }],
       })
     } catch (e) {
-      assert(e.message.endsWith('error: [plugin: x] Expected onResolve() callback in plugin "x" to return an object'), e.message)
+      assert(e.message.endsWith('ERROR: [plugin: x] Expected onResolve() callback in plugin "x" to return an object'), e.message)
     }
 
     try {
@@ -212,7 +212,7 @@ let pluginTests = {
         }],
       })
     } catch (e) {
-      assert(e.message.endsWith('error: [plugin: x] Invalid option from onResolve() callback in plugin "x": "thisIsWrong"'), e.message)
+      assert(e.message.endsWith('ERROR: [plugin: x] Invalid option from onResolve() callback in plugin "x": "thisIsWrong"'), e.message)
     }
   },
 
@@ -255,7 +255,7 @@ let pluginTests = {
         }],
       })
     } catch (e) {
-      assert(e.message.endsWith(`error: [plugin: x] Expected onLoad() callback in plugin "x" to return an object`), e.message)
+      assert(e.message.endsWith(`ERROR: [plugin: x] Expected onLoad() callback in plugin "x" to return an object`), e.message)
     }
 
     try {
@@ -276,7 +276,7 @@ let pluginTests = {
         }],
       })
     } catch (e) {
-      assert(e.message.endsWith('error: [plugin: x] Invalid option from onLoad() callback in plugin "x": "thisIsWrong"'), e.message)
+      assert(e.message.endsWith('ERROR: [plugin: x] Invalid option from onLoad() callback in plugin "x": "thisIsWrong"'), e.message)
     }
   },
 
@@ -884,7 +884,10 @@ let pluginTests = {
     assert.notStrictEqual(error, void 0)
     if (!Array.isArray(error.errors)) throw error
     assert.strictEqual(error.errors.length, 1)
-    assert.strictEqual(error.errors[0].text, `Could not resolve "./loadme" (the plugin "name" didn't set a resolve directory)`)
+    assert.strictEqual(error.errors[0].text, `Could not resolve "./loadme"`)
+    assert.strictEqual(error.errors[0].notes[0].text,
+      `The plugin "name" didn't set a resolve directory for the file "for-testing:virtual", ` +
+      `so esbuild did not search for "./loadme" on the file system.`)
   },
 
   async webAssembly({ esbuild, testDir }) {
@@ -1227,6 +1230,7 @@ let pluginTests = {
     } catch (e) {
       assert.deepStrictEqual(e.warnings, [])
       assert.deepStrictEqual(e.errors, [{
+        id: '',
         pluginName: '',
         text: 'Expected ";" but found "y"',
         location: {
@@ -1236,7 +1240,7 @@ let pluginTests = {
           column: 2,
           length: 1,
           lineText: 'x y',
-          suggestion: '',
+          suggestion: ';',
         },
         notes: [],
         detail: void 0,
@@ -1247,6 +1251,7 @@ let pluginTests = {
   async transformUndefinedDetailForWarning({ esbuild }) {
     const result = await esbuild.transform('typeof x == "null"')
     assert.deepStrictEqual(result.warnings, [{
+      id: 'impossible-typeof',
       pluginName: '',
       text: 'The "typeof" operator will never evaluate to "null"',
       location: {
@@ -1258,7 +1263,12 @@ let pluginTests = {
         lineText: 'typeof x == "null"',
         suggestion: '',
       },
-      notes: [],
+      notes: [
+        {
+          location: null,
+          text: 'The expression "typeof x" actually evaluates to "object" in JavaScript, not "null". You need to use "x === null" to test for null.'
+        }
+      ],
       detail: void 0,
     }])
   },
@@ -1274,6 +1284,7 @@ let pluginTests = {
     } catch (e) {
       assert.deepStrictEqual(e.warnings, [])
       assert.deepStrictEqual(e.errors, [{
+        id: '',
         pluginName: '',
         text: 'Expected ";" but found "y"',
         location: {
@@ -1283,7 +1294,7 @@ let pluginTests = {
           column: 2,
           length: 1,
           lineText: 'x y',
-          suggestion: '',
+          suggestion: ';',
         },
         notes: [],
         detail: void 0,
@@ -1298,6 +1309,7 @@ let pluginTests = {
       logLevel: 'silent',
     })
     assert.deepStrictEqual(result.warnings, [{
+      id: 'impossible-typeof',
       pluginName: '',
       text: 'The "typeof" operator will never evaluate to "null"',
       location: {
@@ -1309,7 +1321,12 @@ let pluginTests = {
         lineText: 'typeof x == "null"',
         suggestion: '',
       },
-      notes: [],
+      notes: [
+        {
+          location: null,
+          text: 'The expression "typeof x" actually evaluates to "object" in JavaScript, not "null". You need to use "x === null" to test for null.'
+        }
+      ],
       detail: void 0,
     }])
   },
@@ -1414,6 +1431,7 @@ let pluginTests = {
       assert.strictEqual(e.warnings.length, 0)
       assert.strictEqual(e.errors.length, 1)
       assert.deepStrictEqual(e.errors[0], {
+        id: '',
         pluginName: 'the-plugin',
         text: 'some error',
         location: {
@@ -1487,6 +1505,7 @@ let pluginTests = {
     })
     assert.strictEqual(result.warnings.length, 1)
     assert.deepStrictEqual(result.warnings[0], {
+      id: '',
       pluginName: 'other-plugin',
       text: 'some warning',
       location: {
@@ -1562,6 +1581,7 @@ let pluginTests = {
       assert.strictEqual(e.warnings.length, 0)
       assert.strictEqual(e.errors.length, 1)
       assert.deepStrictEqual(e.errors[0], {
+        id: '',
         pluginName: 'the-plugin',
         text: 'some error',
         location: {
@@ -1634,6 +1654,7 @@ let pluginTests = {
     })
     assert.strictEqual(result.warnings.length, 1)
     assert.deepStrictEqual(result.warnings[0], {
+      id: '',
       pluginName: 'the-plugin',
       text: 'some warning',
       location: {
@@ -1891,7 +1912,7 @@ let pluginTests = {
     assert.strictEqual(resolveKind, 'import-rule')
   },
 
-  async resolveKindImportStmt({ esbuild }) {
+  async resolveKindURLToken({ esbuild }) {
     let resolveKind = '<missing>'
     try {
       await esbuild.build({
@@ -2036,6 +2057,315 @@ let pluginTests = {
     })
     assert.strictEqual(await readFileAsync(input, 'utf8'), `some data`)
     assert.strictEqual(require(path.join(outdir, 'in.js')), `./in.data`)
+  },
+
+  async esbuildProperty({ esbuild }) {
+    let esbuildFromBuild
+    await esbuild.build({
+      entryPoints: ['xyz'],
+      write: false,
+      plugins: [{
+        name: 'plugin',
+        setup(build) {
+          esbuildFromBuild = build.esbuild
+          build.onResolve({ filter: /.*/ }, () => ({ path: 'foo', namespace: 'bar' }))
+          build.onLoad({ filter: /.*/ }, () => ({ contents: '' }))
+        },
+      }],
+    })
+    assert.deepStrictEqual({ ...esbuildFromBuild }, { ...esbuild })
+  },
+
+  async onResolveInvalidPathSuffix({ esbuild }) {
+    try {
+      await esbuild.build({
+        entryPoints: ['foo'],
+        logLevel: 'silent',
+        plugins: [{
+          name: 'plugin',
+          setup(build) {
+            build.onResolve({ filter: /.*/ }, () => ({ path: 'bar', suffix: '%what' }))
+          },
+        }],
+      })
+      throw new Error('Expected an error to be thrown')
+    } catch (e) {
+      assert.strictEqual(e.message, `Build failed with 1 error:
+error: Invalid path suffix "%what" returned from plugin (must start with "?" or "#")`)
+    }
+  },
+
+  async onResolveWithInternalOnLoadAndQuerySuffix({ testDir, esbuild }) {
+    const entry = path.join(testDir, 'entry.js')
+    await writeFileAsync(entry, `console.log('entry')`)
+    const onResolveSet = new Set()
+    const onLoadSet = new Set()
+    await esbuild.build({
+      stdin: {
+        resolveDir: testDir,
+        contents: `
+          import "foo%a"
+          import "foo%b"
+        `,
+      },
+      bundle: true,
+      write: false,
+      plugins: [{
+        name: 'plugin',
+        setup(build) {
+          build.onResolve({ filter: /.*/ }, args => {
+            onResolveSet.add({ path: args.path, suffix: args.suffix })
+            if (args.path.startsWith('foo%')) {
+              return {
+                path: entry,
+                suffix: '?' + args.path.slice(args.path.indexOf('%') + 1),
+              }
+            }
+          })
+          build.onLoad({ filter: /.*/ }, args => {
+            onLoadSet.add({ path: args.path, suffix: args.suffix })
+          })
+        },
+      }],
+    })
+    const order = (a, b) => {
+      a = JSON.stringify(a)
+      b = JSON.stringify(b)
+      return (a > b) - (a < b)
+    }
+    const observed = JSON.stringify({
+      onResolve: [...onResolveSet].sort(order),
+      onLoad: [...onLoadSet].sort(order),
+    }, null, 2)
+    const expected = JSON.stringify({
+      onResolve: [
+        { path: 'foo%a' },
+        { path: 'foo%b' },
+      ],
+      onLoad: [
+        { path: path.join(testDir, 'entry.js'), suffix: '?a' },
+        { path: path.join(testDir, 'entry.js'), suffix: '?b' },
+      ],
+    }, null, 2)
+    if (observed !== expected) throw new Error(`Observed ${observed}, expected ${expected}`)
+  },
+
+  async onLoadWithInternalOnResolveAndQuerySuffix({ testDir, esbuild }) {
+    const entry = path.join(testDir, 'entry.js')
+    await writeFileAsync(entry, `console.log('entry')`)
+    const onResolveSet = new Set()
+    const onLoadSet = new Set()
+    await esbuild.build({
+      stdin: {
+        resolveDir: testDir,
+        contents: `
+          import "./entry?a"
+          import "./entry?b"
+        `,
+      },
+      bundle: true,
+      write: false,
+      plugins: [{
+        name: 'plugin',
+        setup(build) {
+          build.onResolve({ filter: /.*/ }, args => {
+            onResolveSet.add({ path: args.path, suffix: args.suffix })
+          })
+          build.onLoad({ filter: /.*/ }, args => {
+            onLoadSet.add({ path: args.path, suffix: args.suffix })
+          })
+        },
+      }],
+    })
+    const order = (a, b) => {
+      a = JSON.stringify(a)
+      b = JSON.stringify(b)
+      return (a > b) - (a < b)
+    }
+    const observed = JSON.stringify({
+      onResolve: [...onResolveSet].sort(order),
+      onLoad: [...onLoadSet].sort(order),
+    }, null, 2)
+    const expected = JSON.stringify({
+      onResolve: [
+        { path: './entry?a' },
+        { path: './entry?b' },
+      ],
+      onLoad: [
+        { path: path.join(testDir, 'entry.js'), suffix: '?a' },
+        { path: path.join(testDir, 'entry.js'), suffix: '?b' },
+      ],
+    }, null, 2)
+    if (observed !== expected) throw new Error(`Observed ${observed}, expected ${expected}`)
+  },
+
+  async externalSideEffectsFalse({ esbuild }) {
+    const build = await esbuild.build({
+      entryPoints: ['entry'],
+      bundle: true,
+      write: false,
+      platform: 'node',
+      format: 'esm',
+      plugins: [{
+        name: 'plugin',
+        setup(build) {
+          build.onResolve({ filter: /.*/ }, args => {
+            if (args.importer === '') return { path: args.path, namespace: 'entry' }
+            else return { path: args.path, external: true, sideEffects: args.path !== 'noSideEffects' }
+          })
+          build.onLoad({ filter: /.*/, namespace: 'entry' }, () => {
+            return {
+              contents: `
+                import "sideEffects"
+                import "noSideEffects"
+              `,
+            }
+          })
+        },
+      }],
+    })
+    assert.strictEqual(build.outputFiles[0].text, `// entry:entry\nimport "sideEffects";\n`)
+  },
+
+  async callResolveTooEarlyError({ esbuild }) {
+    try {
+      await esbuild.build({
+        entryPoints: [],
+        logLevel: 'silent',
+        plugins: [{
+          name: 'plugin',
+          async setup(build) {
+            await build.resolve('foo', { kind: 'entry-point' })
+          },
+        }],
+      })
+      throw new Error('Expected an error to be thrown')
+    } catch (e) {
+      assert(e.message.includes('Cannot call "resolve" before plugin setup has completed'), e.message)
+    }
+  },
+
+  async callResolveTooLateError({ esbuild }) {
+    let resolve
+    await esbuild.build({
+      entryPoints: [],
+      plugins: [{
+        name: 'plugin',
+        async setup(build) {
+          resolve = build.resolve
+        },
+      }],
+    })
+    try {
+      const result = await resolve('foo', { kind: 'entry-point' })
+      console.log(result.errors)
+      throw new Error('Expected an error to be thrown')
+    } catch (e) {
+      assert(e.message.includes('Cannot call \"resolve\" on an inactive build'), e.message)
+    }
+  },
+
+  async callResolveBadKindError({ esbuild }) {
+    try {
+      await esbuild.build({
+        entryPoints: ['entry'],
+        logLevel: 'silent',
+        plugins: [{
+          name: 'plugin',
+          async setup(build) {
+            build.onResolve({ filter: /^entry$/ }, async () => {
+              return await build.resolve('foo', { kind: 'what' })
+            })
+          },
+        }],
+      })
+      throw new Error('Expected an error to be thrown')
+    } catch (e) {
+      assert(e.message.includes('Invalid kind: "what"'), e.message)
+    }
+  },
+
+  // Test that user options are taken into account
+  async callResolveUserOptionsExternal({ esbuild, testDir }) {
+    const result = await esbuild.build({
+      stdin: { contents: `import "foo"` },
+      write: false,
+      bundle: true,
+      external: ['bar'],
+      format: 'esm',
+      plugins: [{
+        name: 'plugin',
+        async setup(build) {
+          build.onResolve({ filter: /^foo$/ }, async () => {
+            const result = await build.resolve('bar', {
+              resolveDir: testDir,
+              kind: 'import-statement',
+            })
+            assert(result.external)
+            return { path: 'baz', external: true }
+          })
+        },
+      }],
+    })
+    assert.strictEqual(result.outputFiles[0].text, `// <stdin>\nimport "baz";\n`)
+  },
+
+  async callResolveBuiltInHandler({ esbuild, testDir }) {
+    const srcDir = path.join(testDir, 'src')
+    const input = path.join(srcDir, 'input.js')
+    await mkdirAsync(srcDir, { recursive: true })
+    await writeFileAsync(input, `console.log(123)`)
+    const result = await esbuild.build({
+      entryPoints: ['entry'],
+      write: false,
+      plugins: [{
+        name: 'plugin',
+        setup(build) {
+          build.onResolve({ filter: /^entry$/ }, async () => {
+            return await build.resolve('./' + path.basename(input), {
+              resolveDir: srcDir,
+              kind: 'import-statement',
+            })
+          })
+        },
+      }],
+    })
+    assert.strictEqual(result.outputFiles[0].text, `console.log(123);\n`)
+  },
+
+  async callResolvePluginHandler({ esbuild, testDir }) {
+    const srcDir = path.join(testDir, 'src')
+    const input = path.join(srcDir, 'input.js')
+    await mkdirAsync(srcDir, { recursive: true })
+    await writeFileAsync(input, `console.log(123)`)
+    const result = await esbuild.build({
+      entryPoints: ['entry'],
+      write: false,
+      plugins: [{
+        name: 'plugin',
+        setup(build) {
+          build.onResolve({ filter: /^entry$/ }, async () => {
+            return await build.resolve('foo', {
+              importer: 'foo-importer',
+              namespace: 'foo-namespace',
+              resolveDir: 'foo-resolveDir',
+              pluginData: 'foo-pluginData',
+              kind: 'dynamic-import',
+            })
+          })
+          build.onResolve({ filter: /^foo$/ }, async (args) => {
+            assert.strictEqual(args.path, 'foo')
+            assert.strictEqual(args.importer, 'foo-importer')
+            assert.strictEqual(args.namespace, 'foo-namespace')
+            assert.strictEqual(args.resolveDir, path.join(process.cwd(), 'foo-resolveDir'))
+            assert.strictEqual(args.pluginData, 'foo-pluginData')
+            assert.strictEqual(args.kind, 'dynamic-import')
+            return { path: input }
+          })
+        },
+      }],
+    })
+    assert.strictEqual(result.outputFiles[0].text, `console.log(123);\n`)
   },
 }
 
@@ -2334,6 +2664,36 @@ let syncTests = {
     result.rebuild.dispose()
   },
 
+  async onStartCallbackWithDelay({ esbuild }) {
+    await esbuild.build({
+      entryPoints: ['foo'],
+      write: false,
+      logLevel: 'silent',
+      plugins: [
+        {
+          name: 'some-plugin',
+          setup(build) {
+            let isStarted = false
+            build.onStart(async () => {
+              await new Promise(r => setTimeout(r, 1000))
+              isStarted = true
+            })
+
+            // Verify that "onStart" is finished before "onResolve" and "onLoad" run
+            build.onResolve({ filter: /foo/ }, () => {
+              assert.strictEqual(isStarted, true)
+              return { path: 'foo', namespace: 'foo' }
+            })
+            build.onLoad({ filter: /foo/ }, () => {
+              assert.strictEqual(isStarted, true)
+              return { contents: '' }
+            })
+          },
+        },
+      ],
+    })
+  },
+
   async onEndCallback({ esbuild, testDir }) {
     const input = path.join(testDir, 'in.js')
     await writeFileAsync(input, ``)
@@ -2412,6 +2772,44 @@ let syncTests = {
     }
 
     result.rebuild.dispose()
+  },
+
+  async onEndCallbackMutateContents({ esbuild, testDir }) {
+    const input = path.join(testDir, 'in.js')
+    await writeFileAsync(input, `x=y`)
+
+    let onEndTimes = 0
+
+    const result = await esbuild.build({
+      entryPoints: [input],
+      write: false,
+      plugins: [
+        {
+          name: 'some-plugin',
+          setup(build) {
+            build.onEnd(result => {
+              onEndTimes++
+
+              assert.deepStrictEqual(result.outputFiles[0].contents, new Uint8Array([120, 32, 61, 32, 121, 59, 10]))
+              assert.deepStrictEqual(result.outputFiles[0].text, 'x = y;\n')
+
+              result.outputFiles[0].contents = new Uint8Array([120, 61, 121])
+              assert.deepStrictEqual(result.outputFiles[0].contents, new Uint8Array([120, 61, 121]))
+              assert.deepStrictEqual(result.outputFiles[0].text, 'x=y')
+
+              result.outputFiles[0].contents = new Uint8Array([121, 61, 120])
+              assert.deepStrictEqual(result.outputFiles[0].contents, new Uint8Array([121, 61, 120]))
+              assert.deepStrictEqual(result.outputFiles[0].text, 'y=x')
+            })
+          },
+        },
+      ],
+    })
+
+    assert.deepStrictEqual(onEndTimes, 1)
+    assert.deepStrictEqual(result.outputFiles.length, 1)
+    assert.deepStrictEqual(result.outputFiles[0].contents, new Uint8Array([121, 61, 120]))
+    assert.deepStrictEqual(result.outputFiles[0].text, 'y=x')
   },
 
   async onStartOnEndWatchMode({ esbuild, testDir }) {

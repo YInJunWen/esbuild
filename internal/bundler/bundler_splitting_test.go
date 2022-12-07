@@ -272,7 +272,7 @@ func TestSplittingMissingLazyExport(t *testing.T) {
 			OutputFormat:  config.FormatESModule,
 			AbsOutputDir:  "/out",
 		},
-		expectedCompileLog: `common.js: warning: Import "missing" will always be undefined because the file "empty.js" has no exports
+		expectedCompileLog: `common.js: WARNING: Import "missing" will always be undefined because the file "empty.js" has no exports
 `,
 	})
 }
@@ -449,7 +449,7 @@ func TestSplittingDuplicateChunkCollision(t *testing.T) {
 		options: config.Options{
 			Mode:             config.ModeBundle,
 			CodeSplitting:    true,
-			RemoveWhitespace: true,
+			MinifyWhitespace: true,
 			OutputFormat:     config.FormatESModule,
 			AbsOutputDir:     "/out",
 		},
@@ -522,6 +522,31 @@ func TestSplittingPublicPathEntryName(t *testing.T) {
 			OutputFormat:  config.FormatESModule,
 			PublicPath:    "/www/",
 			AbsOutputDir:  "/out",
+		},
+	})
+}
+
+func TestSplittingChunkPathDirPlaceholderImplicitOutbase(t *testing.T) {
+	splitting_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/project/entry.js": `
+				console.log(import('./output-path/should-contain/this-text/file'))
+			`,
+			"/project/output-path/should-contain/this-text/file.js": `
+				console.log('file.js')
+			`,
+		},
+		entryPaths: []string{"/project/entry.js"},
+		options: config.Options{
+			Mode:          config.ModeBundle,
+			OutputFormat:  config.FormatESModule,
+			CodeSplitting: true,
+			AbsOutputDir:  "/out",
+			ChunkPathTemplate: []config.PathTemplate{
+				{Data: "./", Placeholder: config.DirPlaceholder},
+				{Data: "/", Placeholder: config.NamePlaceholder},
+				{Data: "-", Placeholder: config.HashPlaceholder},
+			},
 		},
 	})
 }

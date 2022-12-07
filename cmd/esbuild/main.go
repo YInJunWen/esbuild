@@ -16,11 +16,8 @@ import (
 var helpText = func(colors logger.Colors) string {
 	// Read "NO_COLOR" from the environment. This is a convention that some
 	// software follows. See https://no-color.org/ for more information.
-	for _, key := range os.Environ() {
-		if strings.HasPrefix(key, "NO_COLOR=") {
-			colors = logger.Colors{}
-			break
-		}
+	if _, ok := os.LookupEnv("NO_COLOR"); ok {
+		colors = logger.Colors{}
 	}
 
 	return `
@@ -41,8 +38,8 @@ var helpText = func(colors logger.Colors) string {
                         bundling, otherwise default is iife when platform
                         is browser and cjs when platform is node)
   --loader:X=L          Use loader L to load file extension X, where L is
-                        one of: js | jsx | ts | tsx | json | text | base64 |
-                        file | dataurl | binary
+                        one of: js | jsx | ts | tsx | css | json | text |
+                        base64 | file | dataurl | binary | copy
   --minify              Minify the output (sets all --minify-* flags)
   --outdir=...          The output directory (for multiple entry points)
   --outfile=...         The output file (for one entry point)
@@ -52,7 +49,7 @@ var helpText = func(colors logger.Colors) string {
   --sourcemap           Emit a source map
   --splitting           Enable code splitting (currently only for esm)
   --target=...          Environment target (e.g. es2017, chrome58, firefox57,
-                        safari11, edge16, node10, default esnext)
+                        safari11, edge16, node10, ie9, opera45, default esnext)
   --watch               Watch mode: rebuild on file system changes
 
 ` + colors.Bold + `Advanced options:` + colors.Reset + `
@@ -67,6 +64,7 @@ var helpText = func(colors logger.Colors) string {
   --chunk-names=...         Path template to use for code splitting chunks
                             (default "[name]-[hash]")
   --color=...               Force use of color terminal escapes (true | false)
+  --drop:...                Remove certain constructs (console | debugger)
   --entry-names=...         Path template to use for entry point output paths
                             (default "[dir]/[name]", can also use "[hash]")
   --footer:T=...            Text to be appended to each output file of type T
@@ -76,19 +74,28 @@ var helpText = func(colors logger.Colors) string {
                             incorrect tree-shaking annotations
   --inject:F                Import the file F into all input files and
                             automatically replace matching globals with imports
+  --jsx-dev                 Use React's automatic runtime in development mode
   --jsx-factory=...         What to use for JSX instead of React.createElement
   --jsx-fragment=...        What to use for JSX instead of React.Fragment
-  --jsx=...                 Set to "preserve" to disable transforming JSX to JS
+  --jsx-import-source=...   Override the package name for the automatic runtime
+                            (default "react")
+  --jsx-side-effects        Do not remove unused JSX expressions
+  --jsx=...                 Set to "automatic" to use React's automatic runtime
+                            or to "preserve" to disable transforming JSX to JS
   --keep-names              Preserve "name" on functions and classes
-  --legal-comments=...      Where to place license comments (none | inline |
+  --legal-comments=...      Where to place legal comments (none | inline |
                             eof | linked | external, default eof when bundling
                             and inline otherwise)
   --log-level=...           Disable logging (verbose | debug | info | warning |
                             error | silent, default info)
-  --log-limit=...           Maximum message count or 0 to disable (default 10)
+  --log-limit=...           Maximum message count or 0 to disable (default 6)
+  --log-override:X=Y        Use log level Y for log messages with identifier X
   --main-fields=...         Override the main file order in package.json
                             (default "browser,module,main" when platform is
                             browser and "main,module" when platform is node)
+  --mangle-cache=...        Save "mangle props" decisions to a JSON file
+  --mangle-props=...        Rename all properties matching a regular expression
+  --mangle-quoted=...       Enable renaming of quoted properties (true | false)
   --metafile=...            Write metadata about the build to a JSON file
   --minify-whitespace       Remove whitespace in output files
   --minify-identifiers      Shorten identifiers in output files
@@ -99,6 +106,7 @@ var helpText = func(colors logger.Colors) string {
   --preserve-symlinks       Disable symlink resolution for module lookup
   --public-path=...         Set the base URL for the "file" loader
   --pure:N                  Mark the name N as a pure function for tree shaking
+  --reserve-props=...       Do not mangle these properties
   --resolve-extensions=...  A comma-separated list of implicit extensions
                             (default ".tsx,.ts,.jsx,.js,.css,.json")
   --servedir=...            What to serve in addition to generated output files
@@ -107,6 +115,7 @@ var helpText = func(colors logger.Colors) string {
   --sourcemap=external      Do not link to the source map with a comment
   --sourcemap=inline        Emit the source map with an inline data URL
   --sources-content=false   Omit "sourcesContent" in generated source maps
+  --supported:F=...         Consider syntax F to be supported (true | false)
   --tree-shaking=...        Force tree shaking on or off (false | true)
   --tsconfig=...            Use this tsconfig.json file instead of other ones
   --version                 Print the current version (` + esbuildVersion + `) and exit
@@ -142,6 +151,7 @@ func main() {
 	cpuprofileFile := ""
 	isRunningService := false
 	sendPings := false
+	isWatchForever := false
 
 	// Do an initial scan over the argument list
 	argsEnd := 0
@@ -191,6 +201,21 @@ func main() {
 			sendPings = true
 
 		default:
+			// Some people want to be able to run esbuild's watch mode such that it
+			// never exits. However, esbuild ends watch mode when stdin is closed
+			// because stdin is always closed when the parent process terminates, so
+			// ending watch mode when stdin is closed is a good way to avoid
+			// accidentally creating esbuild processes that live forever.
+			//
+			// Explicitly allow processes that live forever with "--watch=forever".
+			// This may be a reasonable thing to do in a short-lived VM where all
+			// processes in the VM are only started once and then the VM is killed
+			// when the processes are no longer needed.
+			if arg == "--watch=forever" {
+				arg = "--watch"
+				isWatchForever = true
+			}
+
 			// Strip any arguments that were handled above
 			osArgs[argsEnd] = arg
 			argsEnd++
@@ -257,22 +282,27 @@ func main() {
 				exitCode = cli.Run(osArgs)
 			}
 		} else {
-			// Don't disable the GC if this is a long-running process
 			isServeOrWatch := false
+			nonFlagCount := 0
 			for _, arg := range osArgs {
-				if arg == "--serve" || arg == "--watch" || strings.HasPrefix(arg, "--serve=") {
+				if !strings.HasPrefix(arg, "-") {
+					nonFlagCount++
+				} else if arg == "--serve" || arg == "--watch" || strings.HasPrefix(arg, "--serve=") {
 					isServeOrWatch = true
-					break
 				}
 			}
 
 			if !isServeOrWatch {
-				// Disable the GC since we're just going to allocate a bunch of memory
-				// and then exit anyway. This speedup is not insignificant. Make sure to
-				// only do this here once we know that we're not going to be a long-lived
-				// process though.
-				debug.SetGCPercent(-1)
-			} else if !isStdinTTY {
+				// If this is not a long-running process and there is at most a single
+				// entry point, then disable the GC since we're just going to allocate
+				// a bunch of memory and then exit anyway. This speedup is not
+				// insignificant. We don't do this when there are multiple entry points
+				// since otherwise esbuild could unnecessarily use much more memory
+				// than it might otherwise need to process many entry points.
+				if nonFlagCount <= 1 {
+					debug.SetGCPercent(-1)
+				}
+			} else if !isStdinTTY && !isWatchForever {
 				// If stdin isn't a TTY, watch stdin and abort in case it is closed.
 				// This is necessary when the esbuild binary executable is invoked via
 				// the Erlang VM, which doesn't provide a way to exit a child process.
@@ -296,6 +326,12 @@ func main() {
 								os.Exit(1)
 							}
 						}
+
+						// Some people attempt to keep esbuild's watch mode open by piping
+						// an infinite stream of data to stdin such as with "< /dev/zero".
+						// This will make esbuild spin at 100% CPU. To avoid this, put a
+						// small delay after we read some data from stdin.
+						time.Sleep(4 * time.Millisecond)
 					}
 				}()
 			}
